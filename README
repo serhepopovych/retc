@@ -1,0 +1,115 @@
+Re-configure traffic control (tc) rules for subscribers
+=======================================================
+
+Objective
+---------
+Traffic control (shaping, policing, scheduling, dropping) for service
+provider subscribers in most situation means policing/shaping specific
+directions to specific rates.
+
+It is common to have "cheap" access to local (city, country or region)
+networks and "expensive" link to rest of the world (internet).
+
+This forces sales to provide packages for subscribers with high speed
+(hundreds or thousands of megabits per second) and cheap access to local
+networks and low (relative to previous category) access to rest of the
+world.
+
+It is rarely needed to apply limits on specific direction. For example
+limit maximum egress speed to world networks or just put restrictions
+only on ingress.
+
+Performance
+-----------
+Since Linux has long history of traffic control subsystem development
+beginning at the days where SMP systems isn't quite common wast majority
+of scheduling (net/sched) code still does not scale well with number of
+execution units (processors, cores) increase.
+
+There was some attempts to improve situations like BQL and bulk dequeue
+(xmit_more flag on packet buffers) support as well as improved locking
+semantics on packet (re)queue etc all of them does not solve performance
+issues completely.
+
+There is per network device queue spin lock protection and only single
+execution flow can enter scheduling algo (HTB) implementation at any
+given time. Even if this critical section (piece of code protected
+with spin lock in our case) is small enough and there is a tricks
+helping to minimize lock contention on queue spin lock performance
+impact is still very high. That means your traffic control deployment
+does not scale linearly with number of execution units (CPUs) increase.
+
+There is a point where adding more CPUs does not help at all.
+
+Note that for software forwarding handling tens of gigabits per second
+isn't problem: software (e.g. gro, gso, sg)/ hardware (e.g. tso, vlan,
+csum) offload supported in most configurations and forwarded traffic
+is zero-copy mostly. There is a problem to handle high packet per second
+(pps) rate even with NAPI enabled drivers and support for GRO.
+
+Implementation
+--------------
+From technical point there is commonly two options used to provide such
+traffic separation on Access Server (AS):
+
+  - configure two uplink interfaces on AS:
+    - local to send/receive only traffic to/from local networks
+    - world to send/receive rest of the traffic
+
+  - use single uplink interface and Linux realm facility
+    (limited to IPv4 only) to distinguish between networks
+
+Both of these options require assistance from routing daemon (in case
+of Linux realms it is mandatory) and routing protocol (e.g. BGP) to
+filter all except local networks and default route for rest of the
+world and configure correct nexthops for egress traffic. One of good
+known one is BIRD Internet Routing Daemon. Modern FRR with Cisco-like
+configuration may support this too.
+
+Traffic control implementation uses Linux kernel tc-htb(8) for hierarchy
+of classes and tc-pfifo(8) as scheduling (queueing) discipline for each
+of them. Each subscriber is put in it's own class. There is no inner
+classes supported to implement subscriber specific traffic control
+policy as per some of them asking for this: it is their responsibility
+to implenent own QoS for traffic.
+
+For classification IP sets with skbprio extension and corresponding
+iptables rules with SET target used together with exteneded CLASSIFY
+target to normalize packets priority value after SET target. See
+reiptables package for more information on rules being configured.
+
+There is no need for u32 classifier hash tables since IP sets already
+sets skbprio used directly by HTB as MAJOR:MINOR class value. This
+eliminates u32 classifier overhead at all (however it is still used
+to mirror traffic for specific setups, but can be easily replaced with
+tc-matchall(8) when available).
+
+Taking into account that
+
+  1) each network device has it's own packet queue with own spin lock
+  2) there is one (two) uplink interfaces to many subscriber interfaces
+     mapping
+  3) in most cases traffic from uplink has higher packet rates
+
+we choose to put egress (subscribers download) traffic shaper on
+subscriber interface and ingress (subscribers upload) to uplink
+interfaces to respect setups with multiple uplinks where not possible
+to use ingress queuing discipline on subscriber's interface.
+
+However there is special case here that requires tc-u32(8) for better
+compatibility with older kernels or tc-matchall(8) on never kernels
+and Intermediate Functional Block (ifb) network device when single
+policy applied to all traffic (both local and world) at ingress
+(customer upload). It is subject for future improvements (e.g. use
+ingress queuing discipline and policer) and performance problem since
+queuing applied two times: first when packet queued to real uplink
+interface with class that redirects it to ifb where different queuing
+discipline present (this is costly due to queue locking and could be
+optimized in recent kernels).
+
+Implementation depends on reipset to configure IP sets and reiptables
+rules to SET skbprio on packet. All subscribers configuration stored
+in XML-like document in /netctl/etc/usr.xml that is parsed with
+libusrxml used by /netctl/bin/tc.awk helper, called from
+/netctl/bin/retc bash wrapper. For document examples please consult
+libusrxml README file.
