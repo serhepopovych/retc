@@ -1,0 +1,315 @@
+#!/bin/bash
+
+# External tool dependencies, MUST always be defined,
+# even if empty (e.g.: declare -a crt1_request_tools_list=())
+declare -a crt1_request_tools_list=(
+	'tc'		# tc(8)
+	'service'	# service(8)
+	'gawk'		# gawk(1)
+	'sed'		# sed(1)
+	'cat'		# cat(1)
+	'ln'		# ln(1)
+	'mktemp'	# mktemp(1)
+	'rm'		# rm(1)
+	'sudo'		# sudo(8)
+)
+
+# Source startup code
+. /netctl/lib/bash/crt1.sh
+
+# Source functions libraries
+. /netctl/lib/bash/libbool.sh
+. /netctl/lib/bash/librtti.sh
+. /netctl/lib/bash/libstring.sh
+. /netctl/lib/bash/libfile.sh
+. /netctl/lib/bash/liblog.sh
+. /netctl/lib/bash/libprocess.sh
+
+# Source reconfiguration library
+. /netctl/lib/bash/libreconf.sh
+
+################################################################################
+
+# Source reipset configuration
+nctl_SourceIfNotEmpty "$NCTL_PREFIX/etc/reipset.conf"
+
+## If not specified in config, set this to default
+
+[ -x "$REIPSET" ] || REIPSET="$NCTL_PREFIX/bin/reipset"
+
+[ -d "$REIPSET_DIR" ] || REIPSET_DIR="$NCTL_PREFIX/etc/reipset"
+[ -d "$REIPSET_DATADIR" ] || REIPSET_DATADIR="$REIPSET_DIR/data"
+
+[ -n "$USR_XML" ] || USR_XML="$NCTL_PREFIX/etc/usr.xml"
+
+# local config
+[ -d "$RETC_DIR" ] || RETC_DIR="$NCTL_PREFIX/etc/retc"
+[ -d "$RETC_DATADIR" ] || RETC_DATADIR="$RETC_DIR/data"
+
+[ -n "$RETC_SYS_SVC_NAME" ] || RETC_SYS_SVC_NAME='tc'
+
+### DO NOT EDIT BELOW THIS LINE ###
+
+## Map template rules and helper files to filenames
+
+# usrxml rules files
+
+# tc
+declare -r retc_data_tc="$RETC_DATADIR/usrxml/tc"
+
+declare -a retc_data_usrxml_tc
+nctl_templ_expand retc_data_usrxml_tc \
+	"$retc_data_tc/%s.rules" \
+	'qdiscs' 'classes'
+declare -ar retc_data_usrxml_tc
+declare -ir retc_data_usrxml_tc_size=${#retc_data_usrxml_tc[@]}
+
+# ipset
+declare -r retc_data_ipset="$RETC_DATADIR/usrxml/ipset"
+
+declare -ar retc_data_usrxml_ipset=(
+	# v4
+	[RETC_NET2TC_IN_V4]="$retc_data_ipset/net2tc-in-v4.rules"
+	[RETC_NET2TC_OUT_V4]="$retc_data_ipset/net2tc-out-v4.rules"
+	# v6
+	[RETC_NET2TC_IN_V6]="$retc_data_ipset/net2tc-in-v6.rules"
+	[RETC_NET2TC_OUT_V6]="$retc_data_ipset/net2tc-out-v6.rules"
+)
+declare -ir retc_data_usrxml_ipset_size=${#retc_data_usrxml_ipset[@]}
+
+declare -air retc_net2tc_index=(
+	# v4
+	"$RETC_NET2TC_IN_V4"
+	"$RETC_NET2TC_OUT_V4"
+	# v6
+	"$RETC_NET2TC_IN_V6"
+	"$RETC_NET2TC_OUT_V6"
+)
+
+## Prepare sed(1) expressions
+
+declare -a retc_sed
+
+nctl_set_val retc_sed "${RETC_SED[@]}"
+
+declare -i retc_sed_size=${#retc_sed[@]}
+
+for ((i = 0; i < retc_sed_size; i++)); do
+	retc_sed[$i]="${retc_sed[$i]};"
+done
+
+declare -ar retc_sed
+
+## Lock subsystem: prevent from running multiple instances
+nctl_subsys_lock
+nctl_check_ok 'FAIL TO RUN "%s" SUBSYSTEM EXCLUSIVELY\n' "$NCTL_SUBSYS_NAME"
+
+# Usage: retc_ipset
+retc_ipset()
+{
+	local -i i
+	local -i rc=0
+	local retc_ipset_file reipset_ipset_file
+	local retc_filename
+	local reipset_set_name REIPSET_SETS
+
+	# It is an error not specifying sets to synchronize by reipset
+	[ ${#RETC_IP_SETS[@]} -gt 0 ] || return
+
+	# Installing new set rules file should be made atomically
+	# as reipset might be in progress and get inconsistent data.
+	#
+	# This means we should not use cp(1), install(1) or any
+	# other copy procedure, which creates new file and writes
+	# data to it. We should use operations that adds/replaces
+	# target directory entry while contents of the file remains
+	# unchanged.
+	#
+	# An example of such filesystem operations is mv(1).
+
+	for i in "${retc_net2tc_index[@]}"; do
+		reipset_set_name="${RETC_IP_SETS[$i]}"
+		[ -n "$reipset_set_name" ] || return
+
+		retc_ipset_file="${retc_data_usrxml_ipset[$i]}"
+		retc_filename="${retc_ipset_file##*/}"
+
+		reipset_ipset_file="$REIPSET_DATADIR/local/$reipset_set_name/retc-$retc_filename"
+
+		ln -f "$retc_ipset_file" "$reipset_ipset_file" ||
+			nctl_inc_rc rc || return $rc
+
+		REIPSET_SETS="${REIPSET_SETS}external:$reipset_set_name,"
+	done
+	REIPSET_SETS="${REIPSET_SETS%,}"
+
+	# Now we are ready to call reipset.
+	#
+	# As with previous case reipset might be running and
+	# reipset called here could exit immediately without any
+	# work as running reipset holds subsystem lock.
+	#
+	# If subsystem could not be locked reipset exits
+	# with code 254.
+	#
+	# Loop until reipset acquires it's subsystem lock
+	# and performs actions or number of tries reaches 0.
+
+	i=120
+	while :; do
+		reipset_sets="$REIPSET_SETS" "$REIPSET" force
+		rc=$?
+		[ $rc -eq 254 -a $((i--)) -gt 0 ] || break
+		sleep 1
+	done
+
+	return $rc
+}
+
+__restore_original_files=n
+exit_handler()
+{
+	# revert before exit on failure
+	if ! nctl_is_no "$__restore_original_files"; then
+		echo '** Restoring original configuration **'
+
+		# restore configuration files
+		nctl_restore \
+			"${retc_data_usrxml_tc[@]}" \
+			"${retc_data_usrxml_ipset[@]}" ||
+			nctl_inc_rc nctl_rc
+
+		# reload ipset rules via reipset
+		retc_ipset "${retc_data_usrxml_ipset[@]}" ||
+			nctl_inc_rc nctl_rc
+
+		# restore rules
+		sudo service "$RETC_SYS_SVC_NAME" restart ||
+			nctl_inc_rc nctl_rc
+	fi
+
+	# remove backups
+	nctl_cleanup \
+		"${retc_data_usrxml_tc[@]}" \
+		"${retc_data_usrxml_ipset[@]}" ||
+		nctl_inc_rc nctl_rc
+
+	# remove runtime files
+	rm -f "$retc_rules" ||
+		nctl_inc_rc nctl_rc
+
+	# Report end
+	nctl_end_msg
+
+	## Unlock subsystem
+	nctl_subsys_unlock ||
+		nctl_inc_rc nctl_rc
+
+	exit $nctl_rc
+}
+trap 'exit_handler 2>&1 |nctl_log_pipe' EXIT
+
+# Usage: retc_flush
+retc_flush()
+{
+	local -a retc_flush_sed=(
+		'/noqueue|pfifo|mq/b;'
+		's/^qdisc.*[[:space:]]+dev[[:space:]]+([^[:space:]]+)[[:space:]]+root[[:space:]]+.+$/qdisc del dev \1 root/p;'
+		's/^qdisc[[:space:]]+ingress[[:space:]]+.*[[:space:]]+dev[[:space:]]+([^[:space:]]+).+$/qdisc del dev \1 ingress/p;'
+	)
+	local tc_file_tmp
+
+	tc_file_tmp="$NCTL_TMPDIR/tc.flush.XXXXXXXX"
+	tc_file_tmp="$(mktemp "$tc_file_tmp")" || return
+	trap 'rm -f "$tc_file_tmp"' RETURN
+
+	# Dump qdisc first
+	tc qdisc show >"$tc_file_tmp" || return
+
+	# Transform them to rules next
+	sed -n -E -e "${retc_flush_sed[*]}" \
+		-i "$tc_file_tmp" || return
+
+	# end each file with \n
+	echo >>"$tc_file_tmp" || return
+
+	sudo tc -b "$tc_file_tmp"
+}
+
+# Usage: retc_tc <rules_list> ...
+retc_tc()
+{
+	local f
+
+	# Loading rules
+	nctl_log_msg 'Loading rules using "%s"\n' 'tc'
+
+	for f in "$@"; do
+		cat "$f" || return
+		# end each file with \n
+		echo
+	done >"$retc_rules"
+
+	# substitude patterns
+	sed -E -e "${retc_sed[*]}" \
+		-i "$retc_rules" || return
+
+	# actually load rules
+	sudo tc -b "$retc_rules"
+}
+
+# Report start
+nctl_begin_msg
+
+# Make backup of the original file(s) if needed
+nctl_log_msg 'Backup original configuration\n'
+__restore_original_files=y
+nctl_backup \
+	"${retc_data_usrxml_tc[@]}" \
+	"${retc_data_usrxml_ipset[@]}" \
+	2>&1 |nctl_log_pipe
+nctl_check_ok 'ERRORS WHEN BACKUP FILES\n'
+
+# Create rules data files
+nctl_log_msg 'Creating rules data files\n'
+gawk \
+	-v HZ="$NCTL_HZ" \
+	-v nctl_prefix="$NCTL_PREFIX" \
+	-v retc_dir="$RETC_DIR" \
+	-v retc_datadir="$RETC_DATADIR" \
+	-v WO_IF="$WO_IF" \
+	-v LO_IF="$LO_IF" \
+	-v IFB_IF="$IFB_IF" \
+	-v WO_IF_TEMPL="$WO_IF_TEMPL" \
+	-v LO_IF_TEMPL="$LO_IF_TEMPL" \
+	-v IFB_IF_TEMPL="$IFB_IF_TEMPL" \
+	-f "$NCTL_PREFIX/bin/tc.awk" \
+	"$USR_XML" 2>&1 |nctl_log_pipe
+nctl_check_ok 'ERRORS WHEN CREATING RULES FILES\n'
+
+# Flush tc rules
+retc_flush 2>&1 |nctl_log_pipe
+nctl_check_ok 'ERRORS WHEN FLUSHING TC RULES\n'
+
+# Load ipset rules via reipset
+retc_ipset "${retc_data_usrxml_ipset[@]}"
+nctl_check_ok 'ERRORS WHEN LOADING IPSET RULES\n'
+
+# Load tc rules
+retc_rules="$(mktemp "$NCTL_TMPDIR/retc.rules.XXXXXXXX")"
+nctl_check_ok 'ERRORS WHEN CREATING TC RULES FILE\n'
+
+retc_tc "${retc_data_usrxml_tc[@]}" \
+	2>&1 |nctl_log_pipe
+nctl_check_ok 'ERRORS WHEN LOADING TC RULES\n'
+
+# Save updated rules
+nctl_log_msg 'Save updated rules using "%s" service\n' "$RETC_SYS_SVC_NAME"
+{
+	echo -n "$RETC_SYS_SVC_NAME: "
+	sudo service "$RETC_SYS_SVC_NAME" save "$retc_rules"
+} 2>&1 |nctl_log_pipe
+nctl_check_ok 'ERRORS ON SAVING UPDATED RULES\n'
+__restore_original_files=n
+
+exit $nctl_rc
