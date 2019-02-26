@@ -1,0 +1,23 @@
+#!/bin/sh -e
+
+# Requires: useradd(8), userdel(8), usermod(8)
+
+## Adjust filesystem ownership and permissions
+
+[ "$EUID" != 0 ] && owner='' || owner='root:root'
+
+# $ROOT/etc/sudoers.d/10-netctl-retc
+adj_rights "$owner" 0440 "$ROOT/etc/sudoers.d/10-netctl-retc"
+
+[ "$EUID" != 0 ] || owner="root:$RECONFIGURE_GROUP"
+
+# $DEST/netctl/etc/retc/
+adj_rights "$owner" 2775 \
+	"$DEST/netctl/etc/retc/data/usrxml" \
+	"$DEST/netctl/etc/retc/data/usrxml/ipset" \
+	"$DEST/netctl/etc/retc/data/usrxml/tc" \
+
+adj_rights "$owner" 0664 \
+	"$DEST/netctl/etc/retc/data/usrxml/usr.xml"
+
+return 0

@@ -1,7 +1,7 @@
 #!/usr/bin/gawk -f
 
 # Source USRXML database parsing library.
-@include "/netctl/lib/awk/libusrxml.awk"
+@include "@dest@/netctl/lib/awk/libusrxml.awk"
 
 # Returns burst parameter if @burst is non zero.
 # Overwise zero is returned.
@@ -157,7 +157,7 @@ END{
 	# Setup pathes if variables are empty.
 	#
 	if (nctl_prefix == "")
-		nctl_prefix ="/netctl";
+		nctl_prefix ="@dest@/netctl";
 	if (retc_dir == "")
 		retc_dir = nctl_prefix"/etc/retc"
 	if (retc_datadir == "")
