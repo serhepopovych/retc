@@ -322,7 +322,7 @@ END{
 
 		d_if_has_qdisc = 0;
 
-		nifusers = split(USRXML_ifusers[d_if], ifusers, ",");
+		nifusers = split(USRXML_ifusers[d_if], ifusers, " ");
 		for (u = 1; u <= nifusers; u++) {
 			userid = ifusers[u];
 
@@ -339,24 +339,24 @@ END{
 
 			for (pipeid = 0; pipeid < USRXML_userpipe[userid]; pipeid++) {
 				# Zone
-				zone = USRXML_userpipezone[userid,pipeid];
+				zone = USRXML_userpipe[userid,pipeid,"zone"];
 				f_zone = zone_f_zone[zone];
 
 				# Direction
-				dir = USRXML_userpipedir[userid,pipeid];
+				dir = USRXML_userpipe[userid,pipeid,"dir"];
 				f_dir = dir_f_dir[dir];
 
 				# Bandwidth is in kbit[s], burst is in kb[ytes]
-				bw = USRXML_userpipebw[userid,pipeid];
+				bw = USRXML_userpipe[userid,pipeid,"bw"];
 				burst = bw / (8 * HZ);
 
 				# Qdisc
-				qdisc = USRXML_userpipeqdisc[userid,pipeid];
+				qdisc = USRXML_userpipe[userid,pipeid,"qdisc"];
 
 				if (qdisc != "") {
-					n = USRXML_userpipeqdisc[userid,pipeid,"opts"];
+					n = USRXML_userpipe[userid,pipeid,"opts"];
 					for (i = 0; i < n; i++)
-						qdisc = qdisc " " USRXML_userpipeqdisc[userid,pipeid,"opts",i];
+						qdisc = qdisc " " USRXML_userpipe[userid,pipeid,"opts",i];
 				} else {
 					# By default "pfifo" limit is 1 packet. This is sane
 					# default in case of no client qdisc after parsing XML.
