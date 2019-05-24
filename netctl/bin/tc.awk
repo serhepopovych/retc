@@ -92,15 +92,18 @@ function init_client_class_redir(f, iface, redir_iface,
 # Initialize client's IP mapping to traffic class using IPSET
 # skbinfo extension.
 #
-function init_client_ipset(f, userid,
+function init_client_ipset(f,
 			   major_classid, minor_classid,
 			   dir, zones,
-			   usernames, usernets,    netid)
+			   i, users, usernets,    m, j, p)
 {
-	if (!usernets[userid])
+	# i = h,userid
+
+	m = usernets[i,"num"];
+	if (!m)
 		return;
 
-	printf "\n### %s ###\n", usernames[userid] >>f;
+	printf "\n### %s ###\n", users[i] >>f;
 
 	if (zones == "")
 		zones = "all";
@@ -110,11 +113,18 @@ function init_client_ipset(f, userid,
 	else if (dir == "out")
 		printf "\n# out to \"%s\" zone(s) from client\n", zones >>f;
 
-	for (netid = 0; netid < usernets[userid]; netid++) {
+	for (p = 0; p < m; p++) {
+		# h,userid,id
+		j = i SUBSEP p;
+
+		# Skip holes entries
+		if (!(j in usernets))
+			continue;
+
 		printf "%s skbprio %x:%04x comment %s\n",
-			usernets[userid,netid],
+			usernets[j],
 			major_classid, minor_classid,
-			usernames[userid] >>f;
+			users[i] >>f;
 	}
 }
 
@@ -124,7 +134,8 @@ BEGIN{
 	##
 	## Initialize user database parser.
 	##
-	if (init_usr_xml_parser() < 0)
+	h = init_usrxml_parser("retc")
+	if (h < 0)
 		exit 1;
 }
 
@@ -132,17 +143,12 @@ BEGIN{
 	##
 	## Parse user database.
 	##
-	if (run_usr_xml_parser($0) < 0)
+	line = $0;
+	if (run_usrxml_parser(h, line) < 0)
 		exit 1;
 }
 
 END{
-	##
-	## Finish user database parsing.
-	##
-	if (fini_usr_xml_parser() < 0)
-		exit 1;
-
 	##
 	## Configuration.
 	##
@@ -317,15 +323,18 @@ END{
 
 	u_if_nclassid = MINOR_CLASSID_MIN;
 
-	for (d_if in USRXML_ifusers) {
+	ifn = USRXML_ifnames[h,"num"];
+	for (iff = 0; iff < ifn; iff++) {
+		if (!((h,iff) in USRXML_ifnames))
+			continue;
+		d_if = USRXML_ifnames[h,iff];
+
 		d_if_nclassid = MINOR_CLASSID_MIN;
 
 		d_if_has_qdisc = 0;
 
-		nifusers = split(USRXML_ifusers[d_if], ifusers, " ");
-		for (u = 1; u <= nifusers; u++) {
-			userid = ifusers[u];
-
+		split(USRXML_ifnames[h,d_if], userids, " ");
+		for (u in userids) {
 			# Uplink/Downlink class id limit reached: not adding class
 			if (u_if_nclassid > MINOR_CLASSID_MAX ||
 			    d_if_nclassid > MINOR_CLASSID_MAX)
@@ -337,26 +346,37 @@ END{
 
 			ftc_user_printed = 0;
 
-			for (pipeid = 0; pipeid < USRXML_userpipe[userid]; pipeid++) {
+			# h,userid
+			i = h SUBSEP userids[u];
+
+			m = USRXML_userpipe[i];
+			for (p = 0; p < m; p++) {
+				# h,userid,pipeid
+				j = i SUBSEP p;
+
+				# Skip holes entries
+				if (!(j in USRXML_userpipe))
+					continue;
+
 				# Zone
-				zone = USRXML_userpipe[userid,pipeid,"zone"];
+				zone = USRXML_userpipe[j,"zone"];
 				f_zone = zone_f_zone[zone];
 
 				# Direction
-				dir = USRXML_userpipe[userid,pipeid,"dir"];
+				dir = USRXML_userpipe[j,"dir"];
 				f_dir = dir_f_dir[dir];
 
 				# Bandwidth is in kbit[s], burst is in kb[ytes]
-				bw = USRXML_userpipe[userid,pipeid,"bw"];
+				bw = USRXML_userpipe[j,"bw"];
 				burst = bw / (8 * HZ);
 
 				# Qdisc
-				qdisc = USRXML_userpipe[userid,pipeid,"qdisc"];
+				qdisc = USRXML_userpipe[j,"qdisc"];
 
 				if (qdisc != "") {
-					n = USRXML_userpipe[userid,pipeid,"opts"];
-					for (i = 0; i < n; i++)
-						qdisc = qdisc " " USRXML_userpipe[userid,pipeid,"opts",i];
+					l = USRXML_userpipe[j,"opts"];
+					for (o = 0; o < l; o++)
+						qdisc = qdisc " " USRXML_userpipe[j,"opts",o];
 				} else {
 					# By default "pfifo" limit is 1 packet. This is sane
 					# default in case of no client qdisc after parsing XML.
@@ -366,7 +386,7 @@ END{
 				## TC
 
 				if (!ftc_user_printed) {
-					printf "\n### %s ###\n", USRXML_usernames[userid] >>fclasses;
+					printf "\n### %s ###\n", USRXML_users[i] >>fclasses;
 					ftc_user_printed = 1;
 				}
 
@@ -436,15 +456,15 @@ END{
 				minor_classid = or(f_zone_all_in, d_if_nclassid++);
 
 				# v4
-				init_client_ipset(fipset_in_v4, userid,
+				init_client_ipset(fipset_in_v4,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "in", zones_in,
-						  USRXML_usernames, USRXML_usernets);
+						  i, USRXML_users, USRXML_usernets);
 				# v6
-				init_client_ipset(fipset_in_v6, userid,
+				init_client_ipset(fipset_in_v6,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "in", zones_in,
-						  USRXML_usernames, USRXML_usernets6);
+						  i, USRXML_users, USRXML_usernets6);
 			}
 
 			# Out
@@ -452,16 +472,22 @@ END{
 				minor_classid = or(f_zone_all_out, u_if_nclassid++);
 
 				# v4
-				init_client_ipset(fipset_out_v4, userid,
+				init_client_ipset(fipset_out_v4,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "out", zones_out,
-						  USRXML_usernames, USRXML_usernets);
+						  i, USRXML_users, USRXML_usernets);
 				# v6
-				init_client_ipset(fipset_out_v6, userid,
+				init_client_ipset(fipset_out_v6,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "out", zones_out,
-						  USRXML_usernames, USRXML_usernets6);
+						  i, USRXML_users, USRXML_usernets6);
 			}
 		}
 	}
+
+	##
+	## Finish user database parsing.
+	##
+	if (fini_usrxml_parser(h) < 0)
+		exit 1;
 }
