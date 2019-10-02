@@ -323,17 +323,18 @@ END{
 
 	u_if_nclassid = MINOR_CLASSID_MIN;
 
-	ifn = USRXML_ifnames[h,"num"];
+	ifn = USRXML_ifuser[h,"num"];
 	for (iff = 0; iff < ifn; iff++) {
-		if (!((h,iff) in USRXML_ifnames))
+		# Skip holes entries
+		if (!((h,iff) in USRXML_ifuser))
 			continue;
-		d_if = USRXML_ifnames[h,iff];
+		d_if = USRXML_ifuser[h,iff];
 
 		d_if_nclassid = MINOR_CLASSID_MIN;
 
 		d_if_has_qdisc = 0;
 
-		split(USRXML_ifnames[h,d_if], userids, " ");
+		split(USRXML_ifuser[h,d_if], userids, " ");
 		for (u in userids) {
 			# Uplink/Downlink class id limit reached: not adding class
 			if (u_if_nclassid > MINOR_CLASSID_MAX ||
@@ -386,7 +387,7 @@ END{
 				## TC
 
 				if (!ftc_user_printed) {
-					printf "\n### %s ###\n", USRXML_users[i] >>fclasses;
+					printf "\n### %s ###\n", USRXML_ifnames[i] >>fclasses;
 					ftc_user_printed = 1;
 				}
 
@@ -459,12 +460,12 @@ END{
 				init_client_ipset(fipset_in_v4,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "in", zones_in,
-						  i, USRXML_users, USRXML_usernets);
+						  i, USRXML_ifnames, USRXML_usernets);
 				# v6
 				init_client_ipset(fipset_in_v6,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "in", zones_in,
-						  i, USRXML_users, USRXML_usernets6);
+						  i, USRXML_ifnames, USRXML_usernets6);
 			}
 
 			# Out
@@ -475,12 +476,12 @@ END{
 				init_client_ipset(fipset_out_v4,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "out", zones_out,
-						  i, USRXML_users, USRXML_usernets);
+						  i, USRXML_ifnames, USRXML_usernets);
 				# v6
 				init_client_ipset(fipset_out_v6,
 						  DFLT_MAJOR_CLASSID, minor_classid,
 						  "out", zones_out,
-						  i, USRXML_users, USRXML_usernets6);
+						  i, USRXML_ifnames, USRXML_usernets6);
 			}
 		}
 	}
