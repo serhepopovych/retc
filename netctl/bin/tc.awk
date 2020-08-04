@@ -325,10 +325,14 @@ END{
 
 	ifn = USRXML_ifuser[h,"num"];
 	for (iff = 0; iff < ifn; iff++) {
+		# h,userid
+		i = h SUBSEP iff;
+
 		# Skip holes entries
-		if (!((h,iff) in USRXML_ifuser))
+		if (!(i in USRXML_ifuser))
 			continue;
-		d_if = USRXML_ifuser[h,iff];
+
+		d_if = USRXML_ifuser[i];
 
 		d_if_nclassid = MINOR_CLASSID_MIN;
 
