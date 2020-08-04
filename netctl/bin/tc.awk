@@ -134,7 +134,7 @@ BEGIN{
 	##
 	## Initialize user database parser.
 	##
-	h = init_usrxml_parser("retc")
+	h = init_usrxml_parser("tc.awk");
 	if (h < 0)
 		exit 1;
 }
